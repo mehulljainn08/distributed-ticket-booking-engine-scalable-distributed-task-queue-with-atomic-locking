@@ -72,9 +72,12 @@ services:
       - .env
     environment:
       - REDIS_ADDR=redis:6379
+      - WEBHOOK_URL=http://database-webhook-node:4000/webhook/booking-result
+      - ORCHESTRATOR_URL=http://orchestrator:8080
 
     depends_on:
       - redis
+      - database-webhook-node
     deploy:
       resources:
         limits:
@@ -96,6 +99,29 @@ services:
 
     depends_on:
       - orchestrator
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+
+  database-webhook-node:
+    build:
+      context: ./database-webhook-node
+      dockerfile: Dockerfile
+    container_name: database-webhook-node
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - WEBHOOK_SERVICE_PORT=4000
+    ports:
+      - "4000:4000"
+    depends_on:
+      - postgres
+      - redis
     deploy:
       resources:
         limits:

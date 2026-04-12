@@ -1,0 +1,20 @@
+{
+  "name": "database-webhook-node",
+  "version": "1.0.0",
+  "description": "Database & Webhook service — persists bookings to Postgres and broadcasts real-time updates via Socket.IO",
+  "main": "index.js",
+  "author": "Dhruv",
+  "license": "ISC",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.1",
+    "express": "^5.2.1",
+    "pg": "^8.20.0",
+    "socket.io": "^4.8.3"
+  }
+}

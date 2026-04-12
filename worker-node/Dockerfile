@@ -13,6 +13,6 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY . .
 
 USER node
-EXPOSE 8082
+EXPOSE 5000
 
 CMD ["node", "index.js"]

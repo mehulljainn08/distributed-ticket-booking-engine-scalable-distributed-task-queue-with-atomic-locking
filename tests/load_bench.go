@@ -9,15 +9,16 @@ import (
 	"time"
 )
 
-type BookingRequest struct {
-	UserID    string `json:"user_id"`
-	SeatID    string `json:"seat_id"`
-	EventID   string `json:"event_id"`
-	Timestamp int64  `json:"timestamp"`
+// GatewayBookingRequest matches the API Gateway's /book-ticket endpoint
+type GatewayBookingRequest struct {
+	UserID  string   `json:"userId"`
+	EventID string   `json:"eventId"`
+	Seats   []string `json:"seats"`
 }
 
 const (
-	baseURL = "http://localhost:8080"
+	// Gateway is exposed via Nginx on port 3000
+	baseURL = "http://localhost:3000"
 	vus     = 50 // Virtual Users
 	iters   = 20 // Iterations per VU
 )
@@ -37,26 +38,20 @@ func main() {
 			for j := 0; j < iters; j++ {
 				// ── Scenario: Contention on seat_VIP_01 ──
 				userID := fmt.Sprintf("vu_%d_user_%d", vuID, j)
-                
-				// ── Try to Book ──
+
+				// ── Try to Book via Gateway ──
 				status := attemptBook(userID, "seat_VIP_01", "concert_2026")
 
 				mu.Lock()
-				switch status {
-				case 200:
+				switch {
+				case status == 202:
 					successCount++
-				case 409:
+				case status == 409 || status == 400:
 					conflictCount++
 				default:
 					errorCount++
 				}
 				mu.Unlock()
-
-				// If successful, short wait then release
-				if status == 200 {
-					time.Sleep(100 * time.Millisecond)
-					attemptRelease(userID, "seat_VIP_01", "concert_2026")
-				}
 			}
 		}(i)
 	}
@@ -65,38 +60,23 @@ func main() {
 	duration := time.Since(start)
 
 	fmt.Println("\n📊 Performance Results:")
-	fmt.Printf("  ✅ Successful Bookings: %d\n", successCount)
-	fmt.Printf("  🥊 Conflicts (Already Booked): %d\n", conflictCount)
+	fmt.Printf("  ✅ Successful Bookings (Enqueued): %d\n", successCount)
+	fmt.Printf("  🥊 Conflicts / Rejected: %d\n", conflictCount)
 	fmt.Printf("  ❌ Errors: %d\n", errorCount)
 	fmt.Printf("  ⏱️ Total Duration: %v\n", duration)
 	fmt.Printf("  ⚡ Requests Per Second: %.2f req/s\n", float64(vus*iters)/duration.Seconds())
 }
 
 func attemptBook(userID, seatID, eventID string) int {
-	reqBody, _ := json.Marshal(BookingRequest{
+	reqBody, _ := json.Marshal(GatewayBookingRequest{
 		UserID:  userID,
-		SeatID:  seatID,
 		EventID: eventID,
+		Seats:   []string{seatID},
 	})
 
-	resp, err := http.Post(baseURL+"/book", "application/json", bytes.NewBuffer(reqBody))
+	resp, err := http.Post(baseURL+"/book-ticket", "application/json", bytes.NewBuffer(reqBody))
 	if err != nil {
 		fmt.Printf("error: %v\n", err)
-		return 500
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode
-}
-
-func attemptRelease(userID, seatID, eventID string) int {
-	reqBody, _ := json.Marshal(BookingRequest{
-		UserID:  userID,
-		SeatID:  seatID,
-		EventID: eventID,
-	})
-
-	resp, err := http.Post(baseURL+"/release", "application/json", bytes.NewBuffer(reqBody))
-	if err != nil {
 		return 500
 	}
 	defer resp.Body.Close()

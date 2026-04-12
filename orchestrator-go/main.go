@@ -14,10 +14,11 @@ import (
 )
 
 type BookingRequest struct {
-	UserID    string `json:"user_id"`
-	SeatID    string `json:"seat_id"`
-	EventID   string `json:"event_id"`
-	Timestamp int64  `json:"timestamp"`
+	UserID     string `json:"user_id"`
+	SeatID     string `json:"seat_id"`
+	EventID    string `json:"event_id"`
+	WaitlistID string `json:"waitlist_id,omitempty"`
+	Timestamp  int64  `json:"timestamp"`
 }
 
 func lockAndEnqueue(ctx context.Context, client *redis.Client, req BookingRequest) (bool, error) {

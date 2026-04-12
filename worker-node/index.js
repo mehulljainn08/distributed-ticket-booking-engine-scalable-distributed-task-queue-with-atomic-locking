@@ -171,6 +171,7 @@ async function workerLoop(workerId) {
       const seatId = job.seatId || job.seat_id || "unknown";
       const userId = job.userId || job.user_id || "unknown";
       const eventId = job.eventId || job.event_id || "unknown";
+      const waitlistId = job.waitlistId || job.waitlist_id || null;
 
       console.log(
         `[Worker ${workerId}] Processing booking: ${userId} → ${eventId}/${seatId}`
@@ -183,11 +184,12 @@ async function workerLoop(workerId) {
         console.log(
           `[Worker ${workerId}] Payment success → ${eventId}/${seatId}`
         );
-        notifyWebhook({
+        await notifyWebhook({
           status: "confirmed",
           userId,
           seatId,
           eventId,
+          waitlistId,
           timestamp: Date.now(),
         });
       } else {
@@ -198,11 +200,12 @@ async function workerLoop(workerId) {
 
         await releaseSeatLock(userId, seatId, eventId);
 
-        notifyWebhook({
+        await notifyWebhook({
           status: "failed",
           userId,
           seatId,
           eventId,
+          waitlistId,
           timestamp: Date.now(),
         });
       }

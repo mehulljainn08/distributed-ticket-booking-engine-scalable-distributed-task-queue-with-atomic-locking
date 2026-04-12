@@ -6,7 +6,7 @@ import SeatMap from './components/SeatMap';
 import BookingSummary from './components/BookingSummary';
 import WaitlistModal from './components/WaitlistModal';
 import { generateSeats, getSeatStats, MAX_SELECTABLE } from './data/seatData';
-import { submitBookingRequest } from './api/bookingService';
+import { submitBookingRequest, fetchEventSeats } from './api/bookingService';
 import { initSocket, onSeatUpdate, disconnectSocket, emitSeatLockRequest } from './socket/seatSocket';
 import './App.css';
 
@@ -57,9 +57,21 @@ export default function App() {
 
   const seatStats = useMemo(() => getSeatStats(seats), [seats]);
 
-  // ── Socket: real-time seat updates ───────────────────────────
+  // ── Socket & API: real-time seat updates and initial seat load ──
   useEffect(() => {
     initSocket();
+
+    fetchEventSeats(EVENT.id).then(soldSeats => {
+      if (soldSeats && soldSeats.length > 0) {
+        setSeats(prev => {
+          const updated = { ...prev };
+          soldSeats.forEach(id => {
+            if (updated[id]) updated[id].status = 'sold';
+          });
+          return updated;
+        });
+      }
+    });
 
     const unsub = onSeatUpdate(({ seatId, status }) => {
       setSeats(prev => {

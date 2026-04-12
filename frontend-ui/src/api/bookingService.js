@@ -11,6 +11,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:4000';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PUBLIC API
@@ -38,36 +39,36 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000
 export async function submitBookingRequest(payload) {
   const { eventId, userId, seats, timestamp } = payload;
   
-  const requests = seats.map(seatId => {
-    return fetch(`${API_BASE_URL}/book-ticket`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Request-ID': crypto.randomUUID(),          // Idempotency key
-        'X-Client-Version': '1.0.0',
-      },
-      body: JSON.stringify({ eventId, userId, seatId, timestamp }),
-      signal: AbortSignal.timeout(10_000),             // 10s timeout
-    }).then(async (res) => {
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new APIError(res.status, err.message || 'Booking Request failed');
-      }
-      return res.json();
-    });
+  const res = await fetch(`${API_BASE_URL}/book-ticket`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Request-ID': crypto.randomUUID(),          // Idempotency key
+      'X-Client-Version': '1.0.0',
+    },
+    body: JSON.stringify({ eventId, userId, seats, timestamp }),
+    signal: AbortSignal.timeout(10_000),             // 10s timeout
   });
-  
-  const results = await Promise.all(requests);
-  
-  // For WaitlistModal, aggregate into a single object representation:
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new APIError(res.status, err.message || 'Booking Request failed');
+  }
+
+  const data = await res.json();
+
+  // Map Gateway response to what the UI expects
   return {
-    waitlistId: results.length > 1 ? `${results[0].waitlistId} (+${results.length - 1} more)` : results[0].waitlistId,
-    position: results[0]?.position || 0,
-    estimatedTime: results[0]?.estimatedTime || 0,
-    workerNode: results[0]?.workerNode || 'various',
-    redisLockAcquired: true,
+    waitlistId: data.waitlistId || 'unknown',
+    acceptedSeats: data.acceptedSeats || [],
+    failedSeats: data.failedSeats || [],
+    position: 0,
+    estimatedTime: 0,
+    workerNode: 'distributed',
+    redisLockAcquired: (data.acceptedSeats?.length || 0) > 0,
   };
 }
+
 
 /**
  * Poll booking status by waitlist ID.
@@ -79,35 +80,47 @@ export async function submitBookingRequest(payload) {
  * @returns {Promise<{ waitlistId: string, status: string, updatedAt: string }>}
  */
 export async function getBookingStatus(waitlistId) {
-  // ── FUTURE ─────────────────────────────────────────────────────────────────
-  // const response = await fetch(`${API_BASE_URL}/booking-status/${waitlistId}`, {
-  //   headers: { 'Cache-Control': 'no-cache' },
-  //   signal: AbortSignal.timeout(5_000),
-  // });
-  // if (!response.ok) throw new APIError(response.status, 'Status check failed');
-  // return response.json();
-  // ──────────────────────────────────────────────────────────────────────────
-
-  return _mockGetStatus(waitlistId);
+  try {
+    const response = await fetch(`${SOCKET_URL}/bookings/${waitlistId}`, {
+      headers: { 'Cache-Control': 'no-cache' },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) throw new APIError(response.status, 'Status check failed');
+    
+    const data = await response.json();
+    if (data.success && data.bookings && data.bookings.length > 0) {
+      // Find if any seat is failed, otherwise return first seat's status
+      const failed = data.bookings.find(b => b.status === 'failed');
+      const confirmed = data.bookings.find(b => b.status === 'confirmed');
+      
+      const status = failed ? 'FAILED' : (confirmed ? 'CONFIRMED' : 'PENDING');
+      return {
+        waitlistId,
+        status,
+        updatedAt: data.bookings[0].created_at
+      };
+    }
+  } catch (err) {
+    console.error('Failed to get booking status:', err);
+  }
+  
+  return {
+    waitlistId,
+    status: 'PENDING',
+    updatedAt: new Date().toISOString()
+  };
 }
 
-/**
- * Fetch available seats for an event from the database.
- *
- * Future endpoint: GET /events/:eventId/seats
- * Response: { seats: SeatObject[], updatedAt: ISO }
- *
- * Currently using local generateSeats() instead.
- */
 export async function fetchEventSeats(eventId) {
-  // ── FUTURE ─────────────────────────────────────────────────────────────────
-  // const response = await fetch(`${API_BASE_URL}/events/${eventId}/seats`);
-  // if (!response.ok) throw new APIError(response.status, 'Failed to fetch seats');
-  // return response.json();
-  // ──────────────────────────────────────────────────────────────────────────
-
-  // Currently handled by local seatData.js → generateSeats()
-  return null;
+  try {
+    const response = await fetch(`${SOCKET_URL}/seats/${eventId}`);
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.soldSeats || [];
+  } catch (err) {
+    console.error('Failed to fetch event seats:', err);
+    return null;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,45 +133,4 @@ export class APIError extends Error {
     this.name = 'APIError';
     this.status = status;
   }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MOCK IMPLEMENTATIONS  (delete this section once backend is live)
-// ─────────────────────────────────────────────────────────────────────────────
-
-async function _mockSubmitBooking(payload) {
-  // Simulate API Gateway processing delay (600ms–1400ms)
-  await _delay(Math.random() * 800 + 600);
-
-  // Simulate ~8% server-overload failure for distributed system realism
-  if (Math.random() < 0.08) {
-    throw new APIError(503, 'Worker queue at capacity. Please retry in a moment.');
-  }
-
-  const waitlistIds = payload.seats.map((_, i) => `WL-${Date.now().toString(36).toUpperCase().slice(-6)}-${i}`);
-  const displayId = waitlistIds.length > 1 ? `${waitlistIds[0]} (+${waitlistIds.length - 1} more)` : waitlistIds[0];
-
-  return {
-    waitlistId: displayId,
-    position:      Math.floor(Math.random() * 120) + 10,
-    estimatedTime: Math.floor(Math.random() * 20)  + 8,   // seconds
-    seatCount:     payload.seats.length,
-    timestamp:     new Date().toISOString(),
-    workerNode:    `worker-${Math.floor(Math.random() * 4) + 1}`,
-    redisLockAcquired: true,
-  };
-}
-
-async function _mockGetStatus(waitlistId) {
-  await _delay(Math.random() * 400 + 200);
-  const statuses = ['PENDING', 'PROCESSING', 'CONFIRMED'];
-  return {
-    waitlistId,
-    status:    statuses[Math.floor(Math.random() * statuses.length)],
-    updatedAt: new Date().toISOString(),
-  };
-}
-
-function _delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }

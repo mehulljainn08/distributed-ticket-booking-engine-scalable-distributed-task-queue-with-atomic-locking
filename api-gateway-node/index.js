@@ -1,7 +1,9 @@
 const express = require("express");
 const axios = require("axios");
+const cors = require("cors");
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 
 const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL || "http://localhost:8080";
@@ -16,7 +18,7 @@ app.post("/book-ticket", async (req, res) => {
     try {
         const { seats, userId, eventId } = req.body;
 
-        // 🔴 VALIDATION
+        // validation
         if (!Array.isArray(seats) || seats.length === 0) {
             return res.status(400).json({ error: "Seats must be a non-empty array" });
         }
@@ -31,6 +33,9 @@ app.post("/book-ticket", async (req, res) => {
             return res.status(400).json({ error: "Invalid seat IDs", invalidSeats });
         }
 
+        // Generate waitlistId BEFORE calling orchestrator so it flows through the entire pipeline
+        const waitlistId = "wl_" + Date.now();
+
         const acceptedSeats = [];
         const failedSeats = [];
         const requests = seats.map(async (seat) => {
@@ -38,7 +43,8 @@ app.post("/book-ticket", async (req, res) => {
                 await axios.post(`${ORCHESTRATOR_URL}/book`, {
                     seat_id: seat,
                     user_id: userId,
-                    event_id: eventId
+                    event_id: eventId,
+                    waitlist_id: waitlistId
                 });
                 acceptedSeats.push(seat);
             } catch (err) {
@@ -49,10 +55,10 @@ app.post("/book-ticket", async (req, res) => {
         // Wait for all requests
         await Promise.all(requests);
 
-        // 🔵 RESPONSE
+        // RESPONSE
         return res.status(202).json({
             success: true,
-            waitlistId: "wl_" + Date.now(),
+            waitlistId,
             requestedSeats: seats,
             acceptedSeats,
             failedSeats
@@ -64,7 +70,7 @@ app.post("/book-ticket", async (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.API_GATEWAY_PORT || process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`API Gateway running on port ${PORT}`);
 });

@@ -10,7 +10,7 @@
 // Port: 4000  (matches WEBHOOK_URL in worker-node)
 // ═══════════════════════════════════════════════════════════════
 
-require('dotenv').config({ path: '../.env' });
+require('dotenv').config();
 
 const express = require('express');
 const http    = require('http');
@@ -101,17 +101,17 @@ app.post('/webhook/booking-result', async (req, res) => {
 
     // ─── Task 4: Socket.IO broadcast ─────────────────────────────────────────
     if (status === 'confirmed') {
-      // Tell ALL connected frontends this seat is now sold
-      io.emit('seatBooked', { seatId, status: 'sold', bookedBy: userId, eventId });
+      // Tell clients in this event room the seat is now sold
+      io.to(`event:${eventId}`).emit('seatBooked', { seatId, status: 'sold', bookedBy: userId, eventId });
 
       // Tell the specific user their booking is confirmed
-      io.emit('bookingConfirmed', { waitlistId, seats: [seatId], status: 'confirmed', userId });
+      io.to(`event:${eventId}`).emit('bookingConfirmed', { waitlistId, seats: [seatId], status: 'confirmed', userId });
 
       console.log(`[Socket] 📡  seatBooked  → ${seatId}`);
     } else {
       // Seat lock is being released — make it available again on the frontend
-      io.emit('seatReleased', { seatId, eventId });
-      io.emit('bookingFailed',  { waitlistId, seats: [seatId], status: 'failed', userId });
+      io.to(`event:${eventId}`).emit('seatReleased', { seatId, eventId });
+      io.to(`event:${eventId}`).emit('bookingFailed',  { waitlistId, seats: [seatId], status: 'failed', userId });
 
       console.log(`[Socket] 📡  seatReleased → ${seatId}`);
     }

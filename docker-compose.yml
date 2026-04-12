@@ -121,7 +121,6 @@ services:
       - "4000:4000"
     depends_on:
       - postgres
-      - redis
     deploy:
       resources:
         limits:

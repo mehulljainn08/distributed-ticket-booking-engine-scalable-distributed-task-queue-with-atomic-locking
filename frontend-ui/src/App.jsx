@@ -7,7 +7,7 @@ import BookingSummary from './components/BookingSummary';
 import WaitlistModal from './components/WaitlistModal';
 import { generateSeats, getSeatStats, MAX_SELECTABLE } from './data/seatData';
 import { submitBookingRequest, fetchEventSeats } from './api/bookingService';
-import { initSocket, onSeatUpdate, disconnectSocket, emitSeatLockRequest } from './socket/seatSocket';
+import { initSocket, onSeatUpdate, disconnectSocket, emitSeatLockRequest, joinEventRoom } from './socket/seatSocket';
 import './App.css';
 
 // ── Event metadata (future: fetch from GET /events/:id) ──────────
@@ -60,6 +60,7 @@ export default function App() {
   // ── Socket & API: real-time seat updates and initial seat load ──
   useEffect(() => {
     initSocket();
+    joinEventRoom(EVENT.id);
 
     fetchEventSeats(EVENT.id).then(soldSeats => {
       if (soldSeats && soldSeats.length > 0) {

@@ -2,13 +2,32 @@ const axios = require('axios');
 
 const GATEWAY_URL = process.env.GATEWAY_URL || 'http://localhost:3000';
 const WORKER_URL = process.env.WORKER_URL || 'http://localhost:5000';
+const WEBHOOK_URL = process.env.WEBHOOK_URL || 'http://localhost:4000';
 
 async function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function waitForBookingResult(waitlistId, timeoutMs = 20000) {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+        try {
+            const res = await axios.get(`${WEBHOOK_URL}/bookings/${waitlistId}`);
+            if (res.data?.success && Array.isArray(res.data.bookings) && res.data.bookings.length > 0) {
+                return res.data.bookings[0];
+            }
+        } catch (err) {
+            // Keep polling until timeout.
+        }
+        await delay(1000);
+    }
+
+    throw new Error(`Timed out waiting for booking result in DB for waitlistId=${waitlistId}`);
+}
+
 async function runIntegrationTest() {
-    console.log("🚀 Starting End-to-End Integration Test (excluding DB Webhook)...");
+    console.log("🚀 Starting End-to-End Integration Test...");
 
     try {
         // 1. Get initial worker stats
@@ -46,9 +65,9 @@ async function runIntegrationTest() {
             process.exit(1);
         }
 
-        // 3. Wait for the worker to process it. Worker has a 1-5s simulated payment delay.
-        console.log(`\n⏳ Waiting 7 seconds to allow Worker to process the job...`);
-        await delay(7000);
+        // 3. Wait for the worker to process it and persist result.
+        console.log(`\n⏳ Waiting for worker + DB webhook result...`);
+        const finalBooking = await waitForBookingResult(bookRes.data.waitlistId);
 
         // 4. Get updated worker stats
         console.log(`\n📊 Fetching final worker stats...`);
@@ -61,8 +80,8 @@ async function runIntegrationTest() {
         
         if (processedDelta >= seatIds.length) {
             console.log(`\n🎉 INTEGRATION TEST PASSED!`);
-            console.log(`Successfully verified the pipeline: API Gateway -> Go Orchestrator -> Redis -> Node.js Worker.`);
-            console.log(`(DB Webhook verification was intentionally excluded).`);
+            console.log(`Successfully verified the pipeline: API Gateway -> Go Orchestrator -> Redis -> Node.js Worker -> DB/Webhook.`);
+            console.log(`Final booking result: seat=${finalBooking.seat_id}, status=${finalBooking.status}`);
         } else {
             console.error(`\n❌ INTEGRATION TEST FAILED!`);
             console.error(`The worker did not seem to process the job. Worker processed count increased by ${processedDelta}, expected at least ${seatIds.length}.`);

@@ -7,7 +7,7 @@ import BookingSummary from './components/BookingSummary';
 import WaitlistModal from './components/WaitlistModal';
 import { generateSeats, getSeatStats, MAX_SELECTABLE } from './data/seatData';
 import { submitBookingRequest, fetchEventSeats } from './api/bookingService';
-import { initSocket, onSeatUpdate, disconnectSocket, emitSeatLockRequest, joinEventRoom } from './socket/seatSocket';
+import { initSocket, onSeatUpdate, onBookingConfirmed, onBookingFailed, disconnectSocket, emitSeatLockRequest, joinEventRoom } from './socket/seatSocket';
 import './App.css';
 
 // ── Event metadata (future: fetch from GET /events/:id) ──────────
@@ -43,6 +43,9 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [flashSeat, setFlashSeat] = useState(null);
   const toastIdRef = useRef(0);
+  const activeWaitlistRef = useRef(null);
+  const activeUserIdRef = useRef(null);
+  const bookingTrackerRef = useRef(null);
 
   // ── Derived state ─────────────────────────────────────────────
   const selectedSeats = useMemo(
@@ -74,28 +77,105 @@ export default function App() {
       }
     });
 
-    const unsub = onSeatUpdate(({ seatId, status }) => {
+    const unsubSeat = onSeatUpdate(({ seatId, status, bookedBy }) => {
+      let wasSelected = false;
       setSeats(prev => {
         if (!prev[seatId] || prev[seatId].status === status) return prev;
+        wasSelected = prev[seatId].status === 'selected' && status === 'sold';
         return { ...prev, [seatId]: { ...prev[seatId], status } };
       });
 
-      if (status === 'sold') {
-        // If user had selected this seat, deselect and notify
-        setSeats(prev => {
-          if (prev[seatId]?.status === 'selected') {
-            addToast(`Seat ${seatId} was just taken by another user!`, 'warn');
-          }
-          return prev; // already updated above
-        });
-
+      if (status === 'sold' && wasSelected) {
+        if (bookedBy && activeUserIdRef.current && bookedBy === activeUserIdRef.current) {
+          return;
+        }
+        addToast(`Seat ${seatId} was just taken by another user!`, 'warn');
         setFlashSeat(seatId);
         setTimeout(() => setFlashSeat(null), 1000);
       }
     });
 
+    const unsubConfirmed = onBookingConfirmed(({ waitlistId, seats: confirmedSeats = [] }) => {
+      if (!waitlistId || activeWaitlistRef.current !== waitlistId) return;
+
+      setSeats(prev => {
+        const updated = { ...prev };
+        confirmedSeats.forEach(id => {
+          if (updated[id]) updated[id] = { ...updated[id], status: 'sold' };
+        });
+        return updated;
+      });
+
+      const tracker = bookingTrackerRef.current;
+      if (tracker && tracker.waitlistId === waitlistId) {
+        confirmedSeats.forEach(id => {
+          tracker.pending.delete(id);
+          tracker.confirmed.add(id);
+        });
+
+        if (tracker.pending.size === 0) {
+          if (tracker.failed.size === 0) {
+            addToast(`Booking confirmed for ${Array.from(tracker.confirmed).join(', ')}.`, 'info');
+            setPhase(PHASE.IDLE);
+          } else if (tracker.confirmed.size === 0) {
+            setErrorMsg('Booking failed for all seats during payment processing.');
+            setPhase(PHASE.ERROR);
+          } else {
+            addToast(
+              `Partial booking: confirmed ${Array.from(tracker.confirmed).join(', ')}, failed ${Array.from(tracker.failed).join(', ')}.`,
+              'warn'
+            );
+            setPhase(PHASE.IDLE);
+          }
+          setWaitlistInfo(null);
+          activeWaitlistRef.current = null;
+          activeUserIdRef.current = null;
+          bookingTrackerRef.current = null;
+        }
+      }
+    });
+
+    const unsubFailed = onBookingFailed(({ waitlistId, seats: failedSeats = [] }) => {
+      if (!waitlistId || activeWaitlistRef.current !== waitlistId) return;
+
+      setSeats(prev => {
+        const updated = { ...prev };
+        failedSeats.forEach(id => {
+          if (updated[id]) updated[id] = { ...updated[id], status: 'available' };
+        });
+        return updated;
+      });
+
+      const tracker = bookingTrackerRef.current;
+      if (tracker && tracker.waitlistId === waitlistId) {
+        failedSeats.forEach(id => {
+          tracker.pending.delete(id);
+          tracker.failed.add(id);
+        });
+
+        if (tracker.pending.size === 0) {
+          if (tracker.confirmed.size === 0) {
+            setErrorMsg('Booking failed for all seats during payment processing.');
+            setPhase(PHASE.ERROR);
+          } else {
+            addToast(
+              `Partial booking: confirmed ${Array.from(tracker.confirmed).join(', ')}, failed ${Array.from(tracker.failed).join(', ')}.`,
+              'warn'
+            );
+            setPhase(PHASE.IDLE);
+          }
+          setWaitlistInfo(null);
+          activeWaitlistRef.current = null;
+          activeUserIdRef.current = null;
+          bookingTrackerRef.current = null;
+        }
+      }
+    });
+
     return () => {
-      unsub();
+      unsubSeat();
+      unsubConfirmed();
+      unsubFailed();
       disconnectSocket();
     };
   }, []);
@@ -133,38 +213,60 @@ export default function App() {
     if (selectedSeats.length === 0 || phase === PHASE.SUBMITTING) return;
 
     const seatIds = selectedSeats.map(s => s.id);
+    const userId = `USR-${Date.now().toString(36).toUpperCase()}`;
 
     // Emit optimistic lock request to Redis layer
-    emitSeatLockRequest(seatIds, `USR-${Date.now().toString(36).toUpperCase()}`);
+    emitSeatLockRequest(seatIds, userId);
 
     setPhase(PHASE.SUBMITTING);
 
     const payload = {
       eventId:   EVENT.id,
-      userId:    `USR-${Date.now().toString(36).toUpperCase()}`,
+      userId,
       seats:     seatIds,
       timestamp: Date.now(),
     };
 
     try {
       const result = await submitBookingRequest(payload);
+      const accepted = result.acceptedSeats || [];
+      const failed = result.failedSeats || [];
 
-      // Optimistically mark seats as sold (backend confirmed receipt)
-      setSeats(prev => {
-        const updated = { ...prev };
-        seatIds.forEach(id => {
-          if (updated[id]) updated[id] = { ...updated[id], status: 'sold' };
+      if (failed.length > 0) {
+        setSeats(prev => {
+          const updated = { ...prev };
+          failed.forEach(id => {
+            if (updated[id]) updated[id] = { ...updated[id], status: 'available' };
+          });
+          return updated;
         });
-        return updated;
-      });
+        addToast(`Unavailable seats: ${failed.join(', ')}`, 'warn');
+      }
+
+      if (accepted.length === 0) {
+        setErrorMsg('All requested seats were unavailable. Please choose different seats.');
+        setPhase(PHASE.ERROR);
+        return;
+      }
 
       setWaitlistInfo(result);
+      activeWaitlistRef.current = result.waitlistId;
+      activeUserIdRef.current = userId;
+      bookingTrackerRef.current = {
+        waitlistId: result.waitlistId,
+        pending: new Set(accepted),
+        confirmed: new Set(),
+        failed: new Set(failed),
+      };
       setPhase(PHASE.WAITLISTED);
 
     } catch (err) {
       console.error('[Booking] Failed:', err.message);
       setErrorMsg(err.message || 'An unexpected error occurred.');
       setPhase(PHASE.ERROR);
+      activeWaitlistRef.current = null;
+      activeUserIdRef.current = null;
+      bookingTrackerRef.current = null;
 
       // Auto-recover after 4s
       setTimeout(() => {
@@ -178,6 +280,10 @@ export default function App() {
   const handleCloseModal = useCallback(() => {
     setPhase(PHASE.IDLE);
     setWaitlistInfo(null);
+    setErrorMsg('');
+    activeWaitlistRef.current = null;
+    activeUserIdRef.current = null;
+    bookingTrackerRef.current = null;
   }, []);
 
   // ── Remove toast ──────────────────────────────────────────────

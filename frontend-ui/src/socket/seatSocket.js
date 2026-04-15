@@ -16,13 +16,14 @@
 
 import { io } from 'socket.io-client';
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:4000';
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173');
+const SOCKET_PATH = import.meta.env.VITE_SOCKET_PATH || '/socket.io';
 
 let _socket = null;
 let _seatUpdateHandlers  = [];
 let _connectionHandlers  = [];
 let _bookingConfirmHandlers = [];
-let _mockTimers = [];
+let _bookingFailedHandlers = [];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PUBLIC API
@@ -34,7 +35,8 @@ let _mockTimers = [];
  */
 export function initSocket() {
   _socket = io(SOCKET_URL, {
-    transports: ['websocket'],
+    path: SOCKET_PATH,
+    transports: ['polling', 'websocket'],
     reconnectionAttempts: 5,
     reconnectionDelay: 1000,
     auth: { token: localStorage.getItem('auth_token') },
@@ -52,7 +54,7 @@ export function initSocket() {
 
   // Teammate's backend emits this event when a seat is booked by any user
   _socket.on('seatBooked', ({ seatId, status, bookedBy }) => {
-    _seatUpdateHandlers.forEach(h => h({ seatId, status: 'sold' }));
+    _seatUpdateHandlers.forEach(h => h({ seatId, status: 'sold', bookedBy }));
   });
 
   // Teammate's backend emits this when Redis lock expires + seat is released
@@ -63,6 +65,10 @@ export function initSocket() {
   // Worker node emits when YOUR waitlisted booking is confirmed
   _socket.on('bookingConfirmed', ({ waitlistId, seats, status }) => {
     _bookingConfirmHandlers.forEach(h => h({ waitlistId, seats, status }));
+  });
+
+  _socket.on('bookingFailed', ({ waitlistId, seats, status }) => {
+    _bookingFailedHandlers.forEach(h => h({ waitlistId, seats, status }));
   });
 }
 
@@ -91,6 +97,13 @@ export function onBookingConfirmed(handler) {
   _bookingConfirmHandlers.push(handler);
   return () => {
     _bookingConfirmHandlers = _bookingConfirmHandlers.filter(h => h !== handler);
+  };
+}
+
+export function onBookingFailed(handler) {
+  _bookingFailedHandlers.push(handler);
+  return () => {
+    _bookingFailedHandlers = _bookingFailedHandlers.filter(h => h !== handler);
   };
 }
 
@@ -137,4 +150,3 @@ export function disconnectSocket() {
     _socket.disconnect();
   }
 }
-

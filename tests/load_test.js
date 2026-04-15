@@ -54,12 +54,12 @@ export default function () {
     const res = http.post(`${BASE_URL}/book`, payload, params);
 
     check(res, {
-        'status is 200 (Success) or 409 (Conflict)': (r) => [200, 409].includes(r.status),
+        'status is 202 (Accepted) or 409 (Conflict)': (r) => [202, 409].includes(r.status),
         'status is not 500': (r) => r.status !== 500,
     });
 
     // If we won the lock, simulation release after a small delay
-    if (res.status === 200) {
+    if (res.status === 202) {
         sleep(0.5); // Simulation processing
         const relRes = http.post(`${BASE_URL}/release`, payload, params);
         check(relRes, {

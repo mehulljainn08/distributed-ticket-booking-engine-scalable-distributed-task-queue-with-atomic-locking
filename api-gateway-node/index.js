@@ -1,6 +1,11 @@
 const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
+const client = require("prom-client");
+const { randomUUID } = require("crypto");
+
+// Collect default metrics (CPU, memory, etc.)
+client.collectDefaultMetrics();
 
 const app = express();
 app.use(cors());
@@ -11,6 +16,16 @@ const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL || "http://localhost:8080"
 // Health Check
 app.get("/health", (req, res) => {
     res.json({ status: "ok" });
+});
+
+// Prometheus Metrics endpoint
+app.get("/metrics", async (req, res) => {
+    try {
+        res.set("Content-Type", client.register.contentType);
+        res.end(await client.register.metrics());
+    } catch (err) {
+        res.status(500).end(err);
+    }
 });
 
 // Booking API
@@ -34,7 +49,7 @@ app.post("/book-ticket", async (req, res) => {
         }
 
         // Generate waitlistId BEFORE calling orchestrator so it flows through the entire pipeline
-        const waitlistId = "wl_" + Date.now();
+        const waitlistId = "wl_" + randomUUID();
 
         const acceptedSeats = [];
         const failedSeats = [];

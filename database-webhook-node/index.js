@@ -17,6 +17,10 @@ const http    = require('http');
 const { Server } = require('socket.io');
 const { Pool }   = require('pg');
 const cors       = require('cors');
+const client     = require('prom-client');
+
+// Collect default metrics
+client.collectDefaultMetrics();
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const PORT = process.env.WEBHOOK_SERVICE_PORT || 4000;
@@ -43,6 +47,7 @@ async function initDatabase() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS bookings (
       id          SERIAL PRIMARY KEY,
+      idempotency_key VARCHAR(255),
       waitlist_id VARCHAR(255),
       user_id     VARCHAR(255),
       event_id    VARCHAR(255),
@@ -51,7 +56,26 @@ async function initDatabase() {
       created_at  TIMESTAMP DEFAULT NOW()
     );
   `);
+  await pool.query(`
+    ALTER TABLE bookings
+    ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(255);
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS bookings_idempotency_key_uq
+    ON bookings (idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+  `);
   console.log('[DB] ✅  bookings table ready');
+}
+
+function buildIdempotencyKey({ waitlistId, userId, eventId, seatId, status }) {
+  return [
+    waitlistId || "no_waitlist",
+    eventId || "no_event",
+    seatId || "no_seat",
+    userId || "no_user",
+    status || "no_status",
+  ].join(":");
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -66,12 +90,24 @@ app.get('/health', async (_req, res) => {
   }
 });
 
+// Prometheus Metrics endpoint
+app.get('/metrics', async (req, res) => {
+  try {
+    res.set('Content-Type', client.register.contentType);
+    res.end(await client.register.metrics());
+  } catch (err) {
+    res.status(500).end(err);
+  }
+});
+
 // ─── Task 3: Worker Receiver ──────────────────────────────────────────────────
 // Mohit's worker sends:
 //   POST /webhook/booking-result
 //   { status: 'confirmed'|'failed', userId, seatId, eventId, timestamp }
 app.post('/webhook/booking-result', async (req, res) => {
   const { status, userId, seatId, eventId, waitlistId, timestamp } = req.body;
+  const headerKey = req.get('x-idempotency-key');
+  const idempotencyKey = headerKey || buildIdempotencyKey({ waitlistId, userId, eventId, seatId, status });
 
   // Basic validation
   if (!status || !userId || !seatId || !eventId) {
@@ -91,11 +127,28 @@ app.post('/webhook/booking-result', async (req, res) => {
   try {
     // Save to Postgres
     const { rows } = await pool.query(
-      `INSERT INTO bookings (waitlist_id, user_id, event_id, seat_id, status)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO bookings (idempotency_key, waitlist_id, user_id, event_id, seat_id, status)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (idempotency_key) DO NOTHING
        RETURNING id, created_at`,
-      [waitlistId || null, userId, eventId, seatId, status]
+      [idempotencyKey, waitlistId || null, userId, eventId, seatId, status]
     );
+
+    if (!rows.length) {
+      const existing = await pool.query(
+        `SELECT id, created_at FROM bookings WHERE idempotency_key = $1 LIMIT 1`,
+        [idempotencyKey]
+      );
+      const booking = existing.rows[0];
+      return res.status(200).json({
+        success: true,
+        duplicate: true,
+        message: 'Duplicate webhook ignored',
+        bookingId: booking?.id || null,
+        createdAt: booking?.created_at || null,
+      });
+    }
+
     const booking = rows[0];
     console.log(`[Webhook] 📥  saved  seat=${seatId}  status=${status}  id=${booking.id}`);
 

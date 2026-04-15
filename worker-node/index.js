@@ -1,6 +1,26 @@
 const Redis = require("ioredis");
 const axios = require("axios");
 const express = require("express");
+const client = require("prom-client");
+
+// Collect default metrics
+client.collectDefaultMetrics();
+
+// Custom metrics
+const processedJobsCounter = new client.Counter({
+  name: "worker_processed_jobs_total",
+  help: "Total number of jobs processed by the worker",
+});
+
+const successfulJobsCounter = new client.Counter({
+  name: "worker_successful_jobs_total",
+  help: "Total number of successful jobs processed by the worker",
+});
+
+const failedJobsCounter = new client.Counter({
+  name: "worker_failed_jobs_total",
+  help: "Total number of failed jobs processed by the worker",
+});
 
 // ---------------------------------------------------------------------------
 // ENV CONFIGURATION
@@ -68,6 +88,15 @@ app.get("/health", (req, res) => {
   });
 });
 
+app.get("/metrics", async (req, res) => {
+  try {
+    res.set("Content-Type", client.register.contentType);
+    res.end(await client.register.metrics());
+  } catch (err) {
+    res.status(500).end(err);
+  }
+});
+
 app.listen(WORKER_PORT, () => {
   console.log(
     `[Worker] 🔧 Health server on http://localhost:${WORKER_PORT}/health`
@@ -113,10 +142,26 @@ async function releaseSeatLock(userId, seatId, eventId) {
 
 
 // WEBHOOK NOTIFICATION
+function buildIdempotencyKey(payload) {
+  return [
+    payload.waitlistId || "no_waitlist",
+    payload.eventId || "no_event",
+    payload.seatId || "no_seat",
+    payload.userId || "no_user",
+    payload.status || "no_status",
+  ].join(":");
+}
+
 async function notifyWebhook(payload, retries = 3) {
+  const idempotencyKey = buildIdempotencyKey(payload);
+
   for (let i = 0; i < retries; i++) {
     try {
-      await axios.post(WEBHOOK_URL, payload);
+      await axios.post(WEBHOOK_URL, payload, {
+        headers: {
+          "X-Idempotency-Key": idempotencyKey,
+        },
+      });
       console.log(`[Worker] Webhook notified → ${payload.status}`);
       return;
     } catch (err) {
@@ -167,6 +212,7 @@ async function workerLoop(workerId) {
       }
 
       processedCount++;
+      processedJobsCounter.inc();
 
       const seatId = job.seatId || job.seat_id || "unknown";
       const userId = job.userId || job.user_id || "unknown";
@@ -181,6 +227,7 @@ async function workerLoop(workerId) {
 
       if (isSuccess) {
         successCount++;
+        successfulJobsCounter.inc();
         console.log(
           `[Worker ${workerId}] Payment success → ${eventId}/${seatId}`
         );
@@ -194,6 +241,7 @@ async function workerLoop(workerId) {
         });
       } else {
         failureCount++;
+        failedJobsCounter.inc();
         console.log(
           `[Worker ${workerId}] Payment failed → ${eventId}/${seatId}`
         );

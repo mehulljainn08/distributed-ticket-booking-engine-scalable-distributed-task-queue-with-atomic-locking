@@ -10,8 +10,33 @@
 //   This file is the ONLY place that needs to change.
 // ═══════════════════════════════════════════════════════════════
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:4000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+const WEBHOOK_BASE_URL = import.meta.env.VITE_WEBHOOK_BASE_URL || '/db';
+
+function buildRequestId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    return fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
+  }
+
+  if (typeof AbortController === 'undefined') {
+    return fetch(url, options);
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PUBLIC API
@@ -39,16 +64,15 @@ const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:4000';
 export async function submitBookingRequest(payload) {
   const { eventId, userId, seats, timestamp } = payload;
   
-  const res = await fetch(`${API_BASE_URL}/book-ticket`, {
+  const res = await fetchWithTimeout(`${API_BASE_URL}/book-ticket`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Request-ID': crypto.randomUUID(),          // Idempotency key
+      'X-Request-ID': buildRequestId(),             // Idempotency key
       'X-Client-Version': '1.0.0',
     },
     body: JSON.stringify({ eventId, userId, seats, timestamp }),
-    signal: AbortSignal.timeout(10_000),             // 10s timeout
-  });
+  }, 10_000);
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -81,10 +105,9 @@ export async function submitBookingRequest(payload) {
  */
 export async function getBookingStatus(waitlistId) {
   try {
-    const response = await fetch(`${SOCKET_URL}/bookings/${waitlistId}`, {
+    const response = await fetchWithTimeout(`${WEBHOOK_BASE_URL}/bookings/${waitlistId}`, {
       headers: { 'Cache-Control': 'no-cache' },
-      signal: AbortSignal.timeout(5_000),
-    });
+    }, 5_000);
     if (!response.ok) throw new APIError(response.status, 'Status check failed');
     
     const data = await response.json();
@@ -113,7 +136,7 @@ export async function getBookingStatus(waitlistId) {
 
 export async function fetchEventSeats(eventId) {
   try {
-    const response = await fetch(`${SOCKET_URL}/seats/${eventId}`);
+    const response = await fetch(`${WEBHOOK_BASE_URL}/seats/${eventId}`);
     if (!response.ok) return null;
     const data = await response.json();
     return data.soldSeats || [];
@@ -121,6 +144,32 @@ export async function fetchEventSeats(eventId) {
     console.error('Failed to fetch event seats:', err);
     return null;
   }
+}
+
+export async function runNetworkDiagnostics() {
+  const checks = [
+    { name: 'api_health', url: `${API_BASE_URL}/health` },
+    { name: 'db_health', url: `${WEBHOOK_BASE_URL}/health` },
+  ];
+
+  const results = [];
+  for (const check of checks) {
+    try {
+      const response = await fetchWithTimeout(check.url, {}, 5000);
+      results.push({
+        name: check.name,
+        ok: response.ok,
+        status: response.status,
+      });
+    } catch (err) {
+      results.push({
+        name: check.name,
+        ok: false,
+        error: err?.message || String(err),
+      });
+    }
+  }
+  return results;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -153,6 +154,9 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
+
+	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
 	fmt.Println("Go Orchestrator running on http://localhost:" + port)
 	router.Run(":" + port)
 

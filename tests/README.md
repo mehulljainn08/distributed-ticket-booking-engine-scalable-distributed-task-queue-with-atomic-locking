@@ -39,8 +39,8 @@ go run tests/load_bench.go
 
 ### 🥊 The Contention Test
 50 virtual users simultaneously attempt to book **the exact same seat** (`seat_VIP_01`).
-- **Expected Result**: Exactly **one user** should get a `200 OK`. All others should receive a `409 Conflict`.
-- **Validation**: If multiple users get a `200 OK` for the same seat, there's a race condition in the locking logic.
+- **Expected Result**: Exactly **one user** should get a `202 Accepted`. All others should receive a `409 Conflict`.
+- **Validation**: If multiple users get a `202` for the same seat without release flow, there's a race condition in the locking logic.
 
 ### 🚀 The Throughput Test (k6 only)
 Ramps up to 100 concurrent users booking **unique seats**.

@@ -4,16 +4,22 @@ global:
 
 scrape_configs:
   - job_name: 'api-gateway'
-    static_configs:
-      - targets: ['api-gateway:3000']
+    dns_sd_configs:
+      - names: ['api-gateway']
+        type: 'A'
+        port: 3000
 
   - job_name: 'orchestrator'
-    static_configs:
-      - targets: ['orchestrator:8080']
+    dns_sd_configs:
+      - names: ['orchestrator']
+        type: 'A'
+        port: 8080
 
   - job_name: 'worker-node'
-    static_configs:
-      - targets: ['worker-node:5000']
+    dns_sd_configs:
+      - names: ['worker-node']
+        type: 'A'
+        port: 5000
 
   - job_name: 'database-webhook-node'
     static_configs:

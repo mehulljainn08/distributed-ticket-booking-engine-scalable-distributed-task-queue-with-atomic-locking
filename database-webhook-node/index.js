@@ -129,7 +129,7 @@ app.post('/webhook/booking-result', async (req, res) => {
     const { rows } = await pool.query(
       `INSERT INTO bookings (idempotency_key, waitlist_id, user_id, event_id, seat_id, status)
        VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (idempotency_key) DO NOTHING
+       ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
        RETURNING id, created_at`,
       [idempotencyKey, waitlistId || null, userId, eventId, seatId, status]
     );

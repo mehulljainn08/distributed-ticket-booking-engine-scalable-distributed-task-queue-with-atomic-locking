@@ -7,7 +7,7 @@ import BookingSummary from './components/BookingSummary';
 import WaitlistModal from './components/WaitlistModal';
 import { generateSeats, getSeatStats, MAX_SELECTABLE } from './data/seatData';
 import { submitBookingRequest, fetchEventSeats } from './api/bookingService';
-import { initSocket, onSeatUpdate, onBookingConfirmed, onBookingFailed, disconnectSocket, emitSeatLockRequest, joinEventRoom } from './socket/seatSocket';
+import { initSocket, onSeatUpdate, onBookingConfirmed, onBookingFailed, disconnectSocket, emitSeatLockRequest, joinEventRoom, onConnectionChange } from './socket/seatSocket';
 import './App.css';
 
 // ── Event metadata (future: fetch from GET /events/:id) ──────────
@@ -64,6 +64,9 @@ export default function App() {
   useEffect(() => {
     initSocket();
     joinEventRoom(EVENT.id);
+    const unsubConn = onConnectionChange(({ connected }) => {
+      if (connected) joinEventRoom(EVENT.id);
+    });
 
     fetchEventSeats(EVENT.id).then(soldSeats => {
       if (soldSeats && soldSeats.length > 0) {
@@ -176,6 +179,7 @@ export default function App() {
       unsubSeat();
       unsubConfirmed();
       unsubFailed();
+      unsubConn();
       disconnectSocket();
     };
   }, []);

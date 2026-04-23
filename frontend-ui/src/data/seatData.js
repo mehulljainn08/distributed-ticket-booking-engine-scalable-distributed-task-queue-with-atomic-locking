@@ -55,28 +55,7 @@ export const MAX_SELECTABLE = 6;
  * Pre-sold seats for demo realism (~35% of total seats).
  * In production, this state comes from the database via API.
  */
-const PRESOLD_SEATS = new Set([
-  // Row A (Platinum)
-  'A2', 'A4', 'A7', 'A10', 'A11',
-  // Row B (Platinum)
-  'B1', 'B3', 'B6', 'B9',
-  // Row C (Gold)
-  'C2', 'C5', 'C8', 'C11',
-  // Row D (Gold)
-  'D1', 'D4', 'D7', 'D9', 'D12',
-  // Row E (Gold)
-  'E3', 'E6', 'E8', 'E11',
-  // Row F (Silver)
-  'F2', 'F5', 'F8', 'F10',
-  // Row G (Silver)
-  'G1', 'G4', 'G7', 'G9', 'G12',
-  // Row H (Silver)
-  'H3', 'H6', 'H8', 'H11',
-  // Row I (General)
-  'I2', 'I5', 'I8', 'I10', 'I12',
-  // Row J (General)
-  'J1', 'J4', 'J7', 'J9',
-]);
+const PRESOLD_SEATS = new Set([]);
 
 /** Map row letter → section key */
 export function getSectionKeyForRow(row) {

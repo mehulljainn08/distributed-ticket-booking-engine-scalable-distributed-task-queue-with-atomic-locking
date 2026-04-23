@@ -108,7 +108,7 @@ app.listen(WORKER_PORT, () => {
 function simulatePayment() {
   return new Promise((resolve) => {
     const delayMs = Math.floor(Math.random() * 4000) + 1000;
-    const isSuccess = Math.random() < 0.8;
+    const isSuccess = true; // 100% success rate for reliable multi-seat booking testing
 
     console.log(
       `[Worker] Processing payment (${(delayMs / 1000).toFixed(1)}s delay)...`
